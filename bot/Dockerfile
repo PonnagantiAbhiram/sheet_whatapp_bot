@@ -4,9 +4,6 @@ FROM node:22-slim
 RUN apt-get update && apt-get install -y \
     chromium \
     libxss1 \
-    libappindicator3-1 \
-    libindicator7 \
-    libgconf-2-4 \
     libxrender1 \
     libxtst6 \
     libxi6 \
