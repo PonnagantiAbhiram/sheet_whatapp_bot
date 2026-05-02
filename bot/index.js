@@ -48,11 +48,15 @@ client.on('qr', async (qr) => {
   console.log("📱 Scan QR OR use pairing code");
   qrcodeTerminal.generate(qr, { small: true });
 
+  // Wait for the client to fully initialize before requesting the pairing code
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
   try {
     const code = await client.requestPairingCode(ADMIN_NUMBER);
     console.log(`🔐 PAIRING CODE: ${code}`);
   } catch (err) {
-    console.log("❌ Pairing error:", err.message);
+    console.error("❌ Pairing error:", err.message || err);
+    if (err.stack) console.error("❌ Pairing error stack:", err.stack);
   }
 });
 
