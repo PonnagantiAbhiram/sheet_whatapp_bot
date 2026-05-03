@@ -167,9 +167,10 @@ async function start() {
 
   const client = new Client({
     authStrategy: new RemoteAuth({
-      store,
-      backupSyncIntervalMs: 600000,
-    }),
+  store,
+  backupSyncIntervalMs: 600000,
+  dataPath: '/tmp/.wwebjs_auth',
+}),
     puppeteer: {
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
