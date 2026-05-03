@@ -1,6 +1,8 @@
 require('dotenv').config();
 console.log("🔥 Bot started...");
 
+const express = require('express');
+const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
@@ -26,6 +28,31 @@ const {
   formatTaskRows,
   formatSummary,
 } = require('./utils');
+
+// =======================
+// EXPRESS — QR WEB PAGE
+// =======================
+const app = express();
+let lastQR = null;
+
+app.get('/', async (req, res) => {
+  if (!lastQR) return res.send('<h2>QR not ready yet, refresh in 10 seconds...</h2>');
+  const img = await QRCode.toDataURL(lastQR);
+  res.send(`
+    <html>
+      <body style="display:flex;flex-direction:column;align-items:center;font-family:sans-serif;margin-top:50px">
+        <h2>📱 Scan with WhatsApp</h2>
+        <img src="${img}" style="width:300px;height:300px"/>
+        <p>WhatsApp → Linked Devices → Link a Device → Scan this QR</p>
+        <p style="color:grey;font-size:12px">Refresh this page if QR expires</p>
+      </body>
+    </html>
+  `);
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('🌐 QR page running on port', process.env.PORT || 3000);
+});
 
 // =======================
 // MESSAGE HANDLER
@@ -133,19 +160,15 @@ summary`
 // MAIN START FUNCTION
 // =======================
 async function start() {
-  // Connect to MongoDB for persistent session storage
   await mongoose.connect(process.env.MONGODB_URI);
   console.log("✅ MongoDB connected");
 
   const store = new MongoStore({ mongoose });
 
-  // =======================
-  // CLIENT
-  // =======================
   const client = new Client({
     authStrategy: new RemoteAuth({
       store,
-      backupSyncIntervalMs: 300000, // save session to MongoDB every 5 minutes
+      backupSyncIntervalMs: 300000,
     }),
     puppeteer: {
       headless: true,
@@ -155,36 +178,42 @@ async function start() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--single-process',   // required for Railway low-memory containers
-        '--no-zygote',        // prevents Chromium crash in containerized env
+        '--single-process',
+        '--no-zygote',
       ],
     },
   });
 
-  let pairingCodeRequested = false;
+  let pairingRequested = false;
 
   // =======================
-  // QR + PAIRING
+  // QR EVENT
   // =======================
   client.on('qr', async (qr) => {
-    console.log("📱 Scan this QR code in WhatsApp (Linked Devices):");
+    lastQR = qr;
+    console.log("📱 QR ready — open your Railway URL to scan");
     qrcodeTerminal.generate(qr, { small: true });
 
-    // Only attempt pairing code if ADMIN_NUMBER env var is set
-    if (!pairingCodeRequested && process.env.ADMIN_NUMBER) {
-      pairingCodeRequested = true;
+    // ✅ KEY FIX: request pairing code only on first QR, with longer delay
+    if (!pairingRequested && process.env.ADMIN_NUMBER) {
+      pairingRequested = true;
 
-      // Wait 5s for WhatsApp Web JS context to fully load
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Wait 8 seconds for WhatsApp Web to fully initialize
+      console.log("⏳ Waiting 8s before requesting pairing code...");
+      await new Promise(r => setTimeout(r, 8000));
+
+      const phone = process.env.ADMIN_NUMBER.replace(/\D/g, '');
+      console.log(`📞 Requesting pairing code for ${phone}...`);
 
       try {
-        const code = await client.requestPairingCode(
-          process.env.ADMIN_NUMBER.replace(/\D/g, '') // strip non-digits
-        );
+        const code = await client.requestPairingCode(phone);
+        console.log(`\n🔐 ============================`);
         console.log(`🔐 PAIRING CODE: ${code}`);
+        console.log(`🔐 ============================\n`);
+        console.log(`👉 Open WhatsApp → Linked Devices → Link a Device → Link with phone number → Enter: ${code}`);
       } catch (err) {
-        console.error("❌ Pairing code failed (scan QR above instead):", err.message);
-        // Don't crash — QR above is still usable
+        console.error("❌ Pairing code error:", err.message);
+        console.log("👉 Use the QR code at your Railway URL instead");
       }
     }
   });
@@ -193,56 +222,35 @@ async function start() {
   // READY
   // =======================
   client.on('ready', () => {
+    lastQR = null;
+    pairingRequested = false;
     console.log("✅ Bot Ready! Listening for messages...");
-    pairingCodeRequested = false; // reset for potential future reconnect
   });
 
-  // =======================
-  // SESSION SAVED
-  // =======================
   client.on('remote_session_saved', () => {
-    console.log("💾 Session saved to MongoDB — bot will auto-reconnect after restarts");
+    console.log("💾 Session saved to MongoDB");
   });
 
-  // =======================
-  // AUTH FAILURE — auto restart
-  // =======================
   client.on('auth_failure', (msg) => {
     console.error('❌ Auth failure:', msg);
-    console.log('🔄 Restarting in 5s...');
+    pairingRequested = false;
     setTimeout(() => client.initialize(), 5000);
   });
 
-  // =======================
-  // DISCONNECTED — auto restart
-  // =======================
   client.on('disconnected', (reason) => {
     console.log('⚠️ Disconnected:', reason);
-    console.log('🔄 Restarting in 5s...');
-    pairingCodeRequested = false;
+    pairingRequested = false;
     setTimeout(() => client.initialize(), 5000);
   });
 
-  // =======================
-  // MESSAGE EVENTS
-  // =======================
   client.on('message', handleMessage);
-
   client.on('message_create', (message) => {
-    if (message.fromMe) {
-      handleMessage(message);
-    }
+    if (message.fromMe) handleMessage(message);
   });
 
-  // =======================
-  // START CLIENT
-  // =======================
   client.initialize();
 }
 
-// =======================
-// RUN
-// =======================
 start().catch((err) => {
   console.error("💥 Fatal error during startup:", err.message);
   process.exit(1);
