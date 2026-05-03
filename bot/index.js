@@ -168,7 +168,7 @@ async function start() {
   const client = new Client({
     authStrategy: new RemoteAuth({
       store,
-      backupSyncIntervalMs: 300000,
+      backupSyncIntervalMs: 600000,
     }),
     puppeteer: {
       headless: true,
